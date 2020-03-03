@@ -10,7 +10,10 @@ InferSent pre-trained model: https://dl.fbaipublicfiles.com/infersent/infersent1
 
 GloVe word embeddings: https://nlp.stanford.edu/projects/glove/
 
+Pre-trained CE, FE, and CL models: https://drive.google.com/drive/folders/1Xs_S8kKqAsS6N_-JNbgHZnpJvLhuBHKR?usp=sharing
+
 # How to run
+Requirements need to be downloaded and their path should be passed to `predict_labels.py`. create a directory named `sample_models` in this folder (same folder as the code) and place the pre-trained CE, FE, and CL models under it.
 The code gets the path to a `.xls` file and generates a json output file for predicted labels and the prediction probabilities for each sheet in the excel file.
 ```
 usage: predict_labels.py [-h] [--file FILE] [--ce_model CE_MODEL]
