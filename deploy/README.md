@@ -10,7 +10,7 @@ InferSent pre-trained model: https://dl.fbaipublicfiles.com/infersent/infersent1
 
 GloVe word embeddings: https://nlp.stanford.edu/projects/glove/
 
-Pre-trained CE, FE, and CL models: https://drive.google.com/drive/folders/1Xs_S8kKqAsS6N_-JNbgHZnpJvLhuBHKR?usp=sharing
+Sample pre-trained CE, FE, and CL models (trained on a set of 150 annotated spreadsheets): https://drive.google.com/drive/folders/1Xs_S8kKqAsS6N_-JNbgHZnpJvLhuBHKR?usp=sharing
 
 # How to run
 Requirements need to be downloaded and their path should be passed to `predict_labels.py`. create a directory named `sample_models` in this folder (same folder as the code) and place the pre-trained CE, FE, and CL models under it.
