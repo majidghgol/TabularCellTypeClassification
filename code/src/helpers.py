@@ -14,6 +14,11 @@ from InferSent.models import InferSent
 import tqdm
 import pandas as pd
 import re
+from functools import partial
+from multiprocessing import Pool
+
+REG = False
+NUM_THREADS = 2
 
 class Preprocess:
     def __init__(self):
@@ -117,20 +122,46 @@ class TableCellSample:
                                      ann=ann))
         return sample_cells
 
+def __get_vec(line):
+    args = line.split(' ', 1)
+    w = args[0]
+    v = np.array([float(x) for x in args[1].strip().split()])
+    # assert len(v) == 300
+    res = (w, v)
+    return res
+
+def load_WE(w2v_path, vocab_size):
+    unk = '__UNK__'
+    bs = '<s>'
+    es = '</s>'
+    lines = []
+    with open(w2v_path, encoding='utf-8') as infile:
+        for li, line in enumerate(infile):
+            if li > vocab_size and line[:3] != bs and line[:4] != es:
+                continue
+            lines.append(line)
+    print('loading word embeddings...')
+    p = Pool(NUM_THREADS)
+    res = p.map(__get_vec, lines)
+    p.terminate()
+    del lines
+    print('creating dict...')
+    res = dict(res)
+    print('embeddings loaded!')
+    return res, bs, es
+
 class SentEnc():
     def __init__(self, model_path, w2v_path, vocab_size=100000, device='cpu', hp=False):
         self.vocab = set()
         self.device = device
         self.hp = hp
-        self.unk = '__UNK__'
-        self.bs = '<s>'
-        self.es = '</s>'
+        
         self.tokenizer = word_tokenize
         self.vocab_size = vocab_size
         params_model = {'bsize': 64, 'word_emb_dim': 300, 'enc_lstm_dim': 2048,
                     'pool_type': 'max', 'dpout_model': 0.0, 'version': 1}
         self.sent_model = InferSent(params_model).to(self.device).eval()
-        self.sent_model.load_state_dict(torch.load(model_path))
+        self.sent_model.load_state_dict(torch.load(model_path, map_location=device))
         if hp:
             self.sent_model = self.sent_model.half()
         # self.sent_model = self.sent_model.cuda()
@@ -139,29 +170,70 @@ class SentEnc():
         self.cache = dict()
 
     def init_vocab(self, w2v_path):
-        self.w2v = dict()
-        with open(w2v_path, encoding='utf-8') as infile:
-            for li, line in enumerate(infile):
-                args = line.split(' ', 1)
-                w = args[0]
-                if li > self.vocab_size and w != self.bs and w != self.es:
-                    continue
-                v = np.array([float(x) for x in args[1].strip().split()])
-                self.w2v[w] = v
-                assert len(v) == 300
+        self.w2v, self.bs, self.es = load_WE(w2v_path, self.vocab_size)
         self.vocab.update(self.w2v.keys())
         # sentences = list(self.vocab) + [self.unk, self.bs, self.es]
         # self.sent_model.build_vocab(sentences, tokenize=True)
-    
-    def __getitem__(self, sent):
+
+    def prune_sent(self, sent):
         if sent is None:
             sent_tok = []
         else:
             sent_tok = self.tokenizer(sent)
         sent_tok = [x for x in sent_tok if x in self.w2v]
         sent_rec = ' '.join(sent_tok)
-        if sent_rec in self.cache:
-            return self.cache[sent_rec]
+        return sent_rec
+
+    def get_number_encoding(self, num):
+        d = 256
+        device = 'cpu'
+        # consider 4 decimal points
+        a = int(num)
+        b = int((num-a)*1e2)
+
+        a = str(a)[::-1]
+        b = str(b)
+
+        J = torch.arange(0,d)
+        J_even = (J%2==0).float().to(device)
+        J = J.float().to(device)
+        Ia = torch.arange(0, len(a)).float().to(device)
+        Ib = (torch.arange(0, len(b))+1).float().to(device)
+        A = torch.FloatTensor([float(x) for x in a]).to(device)
+        B = torch.FloatTensor([float(x) for x in b]).to(device)
+        
+        J = J.float()
+        
+        A = torch.cat([A.view(1,-1)]*d, dim=0).T
+        Ia = torch.cat([Ia.view(1,-1)]*d, dim=0).T
+        
+        B = torch.cat([B.view(1,-1)]*d, dim=0).T
+        Ib = torch.cat([Ib.view(1,-1)]*d, dim=0).T
+        
+        resA = A*(2**Ia)/10*(J_even*torch.sin(Ia/(10000**(J/d))) + (1-J_even)*torch.cos(Ia/(10000**((J-1)/d))))
+        resB = B*(2.0**(-Ib))/10*(J_even*torch.sin(-Ib/(10000**(J/d))) + (1-J_even)*torch.cos(-Ib/(10000**((J-1)/d))))
+        
+        res = torch.sum(resA, axis=0) + torch.sum(resB, axis=0)
+        res = res / (len(a)+len(b))
+        res = res.numpy()
+        if d < 4096:
+            res = np.append(res, np.zeros(4096-d)).astype('float32')
+        return res
+    
+    def is_number(self, string):
+        # try:
+        #     num = abs(float(string))
+        #     return num
+        # except:
+        #     return None
+        string = string.strip()
+        if re.match('^[-+]?\d+\.\d+$', string): return abs(float(string))
+        if re.match('^[-+]?\d+$', string) and len(string)<5: return abs(int(string))
+        if re.match('^[-+]?[\d,]+$', string) and len(string)<5: return abs(int(string.replace(',', '')))
+        return None
+
+    def get_text_encoding(self, sent):
+        sent_tok = sent.split()
         s = np.array([self.w2v[self.bs]]+[self.w2v[x] for x in sent_tok]+[self.w2v[self.es]])
         l = len(s)
         s = s.reshape([l, 1, 300])
@@ -169,7 +241,7 @@ class SentEnc():
         if self.hp:
             s = s.half()
         s = s.to(self.device)
-        l = np.array([l])
+        l = np.array([l], dtype='int64')
         
         # s = ' '.join(s)
         with torch.no_grad():
@@ -179,8 +251,49 @@ class SentEnc():
                 print(v, s)
             v = res.cpu().detach().numpy()[0]
             del res
-            self.cache[sent_rec] = v
             return v
+    
+    def cache_sentences(self, sentences):
+        self.sent_cache = set()
+        self.num_cache = set()
+        for s in sentences:
+            if s is None: s=''
+            if REG:
+                num = self.is_number(s)
+                if num is not None:
+                    self.num_cache.add((num, s))
+                else:
+                    pruned_s = self.prune_sent(s)
+                    self.sent_cache.add(pruned_s)
+            else:
+                pruned_s = self.prune_sent(s)
+                self.sent_cache.add(pruned_s)
+        print(f'initialize {len(self.sent_cache)} text sentences...')
+        for s in tqdm.tqdm(self.sent_cache):
+            self.cache[s] = self.get_text_encoding(s)
+        print(f'initialize {len(self.num_cache)} numeric sentences...')
+        self.num_cache = list(self.num_cache)
+        for n, n_str in tqdm.tqdm(self.num_cache):
+            self.cache[n_str] = self.get_number_encoding(n)
+        # p = Pool(NUM_THREADS)
+        # vecs = p.map(self.get_number_encoding, self.num_cache)
+        # p.terminate()
+        # for n, v in zip(self.num_cache, vecs):
+        #     self.cache[str(num)] = v
+
+    def __getitem__(self, sent):
+        if sent is None: sent=''
+        if REG:
+            num = self.is_number(sent)
+            if num is not None:
+                    num_str = sent
+                    return self.cache[num_str]
+            else:
+                pruned_s = self.prune_sent(sent) 
+                return self.cache[pruned_s]
+        pruned_s = self.prune_sent(sent) 
+        return self.cache[pruned_s]
+
         # return np.zeros((4096,), dtype='float32')
 
 class SentEncWEAvg():
@@ -196,8 +309,8 @@ class SentEncWEAvg():
             for li, line in enumerate(infile):
                 args = line.split(' ', 1)
                 w = args[0]
-                if li > self.vocab_size and w != self.bs and w != self.es:
-                    continue
+                if li > self.vocab_size:
+                    break
                 v = np.array([float(x) for x in args[1].strip().split()])
                 self.w2v[w] = v
                 assert len(v) == 300
@@ -217,7 +330,6 @@ class SentEncWEAvg():
         v = np.mean(np.array([self.w2v[x] for x in sent_tok]), axis=0)
         return v
 
-
 def pack_seq(X, lens):
     idx_sort, lens_sorted = torch.sort(-lens)[::-1]#, np.argsort(-lens)
     lens_sorted = -lens_sorted
@@ -232,10 +344,6 @@ def pack_seq(X, lens):
 def unpack_seq(X_packed, idx_unsort):
     X = torch.nn.utils.rnn.pad_packed_sequence(X_packed, batch_first=True)[0]
     return X.index_select(0, idx_unsort)
-
-
-
-# def build_infersent_vocab(sent_model, )
 
 def ce_fit_iterative(ce_model, lr, loss, dataloader_train, 
                     dataloader_dev, num_epochs, device, hp=False):
@@ -281,7 +389,6 @@ def ce_fit_iterative(ce_model, lr, loss, dataloader_train,
         eloss_dev /= bnum
 
         yield ce_model, eloss_train, eloss_dev
-
 
 def fe_fit_iterative(fe_model, lr, loss, dataloader_train, 
                     dataloader_dev, num_epochs, device, hp=False):
@@ -358,6 +465,29 @@ def split_train_test(tables, fold, dev_size):
     tables_test = [tables[i] for i in test_inds]
     return tables_train, tables_dev, tables_test
 
+def split_train_test_inds(tables, fold, dev_size):
+    train_set = [(x['fname'], x['sname']) for x in fold['train']]
+    train_set, dev_set = train_set[:-dev_size], train_set[-dev_size:]
+    test_set = [(x['fname'], x['sname']) for x in fold['test']]
+    
+    train_inds = []
+    dev_inds = []
+    test_inds = []
+
+    for ti, t in enumerate(tables):
+        feat = t['feature_array']
+        ann = t['annotations']
+        fname = t['file_name'].lower()
+        sname = t['table_id']
+        tid = (fname,sname)
+        if tid in train_set:
+            train_inds.append(ti)
+        elif tid in dev_set:
+            dev_inds.append(ti)
+        elif tid in test_set:
+            test_inds.append(ti)
+    return train_inds, dev_inds, test_inds
+
 def get_nonempty_cells(tarr):
     n = tarr.shape[0]
     m = tarr.shape[1]
@@ -385,17 +515,70 @@ def get_annotations(ann_array, n, m):
                 annotations.append(label2ind.index(ann))
     return annotations, targets_i, targets_j
 
-def get_cevectarr(tarr, ce_model, senc, device, window, senc_dim=4096):
+def __get_contexts(ij, tarr, window):
+    ind = 0
+    i,j = ij
+    t = tarr[i,j]
+    n,m = tarr.shape
+    contexts = ['' for _ in range(window*4)]
+    for wi in range(-window, window+1):
+        for wj in range(-window, window+1):
+            if wi == 0 and wj == 0:
+                continue
+            if wi != 0 and wj != 0:
+                continue
+            ii = i+wi
+            jj = j+wj
+            if 0 <= ii < n and 0 <= jj < m:
+                c = tarr[ii,jj]
+                contexts.append(c)
+            ind+=1
+    return contexts
+
+def get_cevectarr2(tarr, ce_model, senc, device, window, senc_dim=4096):
     n,m = tarr.shape
     size, targets_i, targets_j = get_nonempty_cells(tarr)
     res = np.zeros([n,m,2*ce_model.encdim])
     targets = np.zeros([size, senc_dim])
     contexts = np.zeros([size, 4*window, senc_dim])
     outer_ind = 0
+
+    get_contexts = partial(__get_contexts, tarr=tarr, window=window)
     for i, j in zip(targets_i, targets_j):
+        pass
+    for ind, (i, j) in enumerate(zip(targets_i, targets_j)):
         t = tarr[i,j]
         targets[outer_ind, :] = senc[t]
+        contexts[outer_ind, :, :]
+    contexts = torch.from_numpy(contexts).float()
+    targets = torch.from_numpy(targets).float()
+    bsize = 1000
+    nbatches = size//bsize
+    if size%bsize > 0 : nbatches+=1
+    for i in range(nbatches):
+        et_emb, ec_emb, _, _ = ce_model.forward(contexts[i*bsize:(i+1)*bsize].to(device), 
+                                                targets[i*bsize:(i+1)*bsize].to(device))
+        res[(targets_i[i*bsize:(i+1)*bsize], targets_j[i*bsize:(i+1)*bsize])] = \
+                            torch.cat([et_emb, ec_emb], dim=-1).detach().cpu().numpy()
+    return res
+
+def get_cevectarr(tarr, ce_model, senc, device, window, senc_dim=4096):
+    n,m = tarr.shape
+    size, targets_i, targets_j = get_nonempty_cells(tarr)
+    res = np.zeros([n,m,2*ce_model.encdim])
+    if len(targets_i) == 0:
+        return res
+    targets = []
+    contexts = []
+    outer_ind = 0
+    dummy = np.zeros(senc_dim)
+    senc_cache = dict([(c, senc[c]) for c in tarr.flatten()])
+    
+    for i, j in zip(targets_i, targets_j):
+        t = tarr[i,j]
+        targets.append(senc_cache[t])
         ind = 0
+        temp_ctx = [dummy for _ in range(window*4)]
         for wi in range(-window, window+1):
             for wj in range(-window, window+1):
                 if wi == 0 and wj == 0:
@@ -406,12 +589,13 @@ def get_cevectarr(tarr, ce_model, senc, device, window, senc_dim=4096):
                 jj = j+wj
                 if 0 <= ii < n and 0 <= jj < m:
                     c = tarr[ii,jj]
-                    contexts[outer_ind, ind, :] = senc[c]
+                    temp_ctx[ind] = senc_cache[c]
                 ind+=1
+        contexts.append(temp_ctx)
         outer_ind += 1
-    contexts = torch.from_numpy(contexts).float()
-    targets = torch.from_numpy(targets).float()
-    bsize = 1000
+    contexts = torch.from_numpy(np.stack(contexts, axis=0)).float()
+    targets = torch.from_numpy(np.stack(targets, axis=0)).float()
+    bsize = 10000
     nbatches = size//bsize
     if size%bsize > 0 : nbatches+=1
     for i in range(nbatches):
