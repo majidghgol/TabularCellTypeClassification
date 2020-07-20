@@ -88,12 +88,46 @@ optional arguments:
 # Training your own models
 To train your own models, you should first create a `.jl.gz` file containing the tables in your dataset. For training the _cell_embeddings_ and _feature_encoding_ models you do not need annotations and can use unlabeled tables. To train _classification_model_ however, you need a dataset where `annotations` field of the table json objects are populated. We explain how you can annotate your own tables and use the tools in this repo to create such dataset.
 
-## Train cell embedding model
+In addition to the annotated tables, a json file containing the needed configurations for the training codes is necessary. Please refer to the the example in `example` folder of this repo for more details.
 
+## Train cell embedding model
+To train a cell embedding model using unlabeled tables, use the `train_ce.py` script. This scripts needs the path to the model specification file (in json formatt), and the path to the folder in which you have cloned the InferSent code.
+
+```
+usage: train_ce.py [-h] [--spec_path SPEC_PATH]
+                   [--infersent_source INFERSENT_SOURCE]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --spec_path SPEC_PATH
+  --infersent_source INFERSENT_SOURCE
+```
 
 ## Train stylistic features encoding model
+To train a cell stylistic features auto-encoder model using unlabeled tables, use the `train_fe.py` script. The input arguments to this script is similar to `train_ce.py`.
+
+```
+usage: train_fe.py [-h] [--spec_path SPEC_PATH]
+                   [--infersent_source INFERSENT_SOURCE]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --spec_path SPEC_PATH
+  --infersent_source INFERSENT_SOURCE
+```
 
 ## Train cell classification model
+To train a cell stylistic features auto-encoder model using unlabeled tables, use the `train_cel.py` script. The input arguments to this script is also similar to `train_ce.py`. Note that this script can only be run after the previous two scripts run successfully and generate the cell embedding, and stylistic feature encoding models.
+
+```
+usage: train_cl.py [-h] [--spec_path SPEC_PATH]
+                   [--infersent_source INFERSENT_SOURCE]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --spec_path SPEC_PATH
+  --infersent_source INFERSENT_SOURCE
+```
 
 ## Reference and citation
 Please cite our ICDM'19 paper.
