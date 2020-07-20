@@ -10,3 +10,4 @@ torch==1.5.1
 torchvision==0.6.0
 tqdm==4.36.1
 xlrd==1.2.0
+nltk==3.4.5
