@@ -1,5 +1,4 @@
 from models import CEModel
-from helpers import CellDatasetInMemory, TableCellSample, SentEnc, ce_fit_iterative
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -13,7 +12,6 @@ import numpy as np
 import sys
 import argparse
 import json
-from InferSent.models import InferSent
 from torch.utils.data import DataLoader
 import logging
 
@@ -60,14 +58,16 @@ def main(spec):
     ## initialize the sentence encodings
     pbar = tqdm(total=len(train_cells)+len(dev_cells))
     pbar.set_description('initialize sent encodings:')
+    sentences = set()
     for c in train_cells:
-        senc[c['target']]
-        [senc[x] for x in c['context']]
+        sentences.add(c['target'])
+        [sentences.add(x) for x in c['context']]
         pbar.update(1)
     for c in dev_cells:
-        senc[c['target']]
-        [senc[x] for x in c['context']]
+        sentences.add(c['target'])
+        [sentences.add(x) for x in c['context']]
         pbar.update(1)
+    senc.cache_sentences(list(sentences))
 
     train_set = CellDatasetInMemory(train_cells, senc)
     dev_set = CellDatasetInMemory(dev_cells, senc)
@@ -92,6 +92,7 @@ def main(spec):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--spec_path', type=str)
+    parser.add_argument('--infersent_source', type=str)
 
     FLAGS, unparsed = parser.parse_known_args()
 
@@ -103,6 +104,10 @@ if __name__ == '__main__':
     os.environ["MKL_NUM_THREADS"] = str(nthreads)
     os.environ["VECLIB_MAXIMUM_THREADS"] = str(nthreads)
     os.environ["NUMEXPR_NUM_THREADS"] = str(nthreads)
+
+    sys.path.append(FLAGS.infersent_source)
+    from InferSent.models import InferSent
+    from helpers import CellDatasetInMemory, TableCellSample, SentEnc, ce_fit_iterative
 
     main(spec)
     

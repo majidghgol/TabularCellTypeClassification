@@ -1,5 +1,4 @@
 from models import ClassificationModel, CEModel, FeatEnc
-from helpers import CellDatasetInMemory, TableCellSample, Preprocess, SentEnc
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -20,9 +19,6 @@ import pandas as pd
 from functools import reduce
 import re
 import tabulate
-from helpers import label2ind, split_train_test, get_nonempty_cells, \
-                get_annotations, get_cevectarr, get_fevectarr, \
-                get_class_weights, get_df
 
 def predict_labels(t, cl_model, ce_model, fe_model, senc, mode='ce+f', device='cpu'):
     if 'ce' in mode: ce_dim = ce_model.encdim*2
@@ -106,14 +102,7 @@ def predict(test_tables, cl_model, ce_model, fe_model, senc, label2ind, mode='ce
                                     [label2ind[x] for x in test_pred]) 
     return f1macro, report, test_gt, test_pred, test_pred_proba
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--spec_path', type=str)
-    parser.add_argument('--models_path', type=str)
-    
-    FLAGS, unparsed = parser.parse_known_args()
-    spec = json.load(open(FLAGS.spec_path))
-
+def main(spec):
     np.random.seed(spec['seed'])
     torch.manual_seed(spec['seed'])
     
@@ -128,7 +117,7 @@ if __name__ == '__main__':
     folds_path = spec['cl']['folds']
     mode = spec['cl']['mode']
     device = spec['device']
-    models_path = FLAGS.models_path
+    models_path = spec['cl']['model_path']
     ce_dim = spec['ce']['encdim']
     senc_dim = spec['senc_dim']
     window = spec['ce']['window']
@@ -183,4 +172,20 @@ if __name__ == '__main__':
     print(tabulate.tabulate(mean_res, headers='keys', tablefmt='psql'))
     print('STD:')
     print(tabulate.tabulate(std_res, headers='keys', tablefmt='psql'))
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--spec_path', type=str)
+    parser.add_argument('--infersent_source', type=str)
+    
+    FLAGS, unparsed = parser.parse_known_args()
+    spec = json.load(open(FLAGS.spec_path))
+
+    sys.path.append(FLAGS.infersent_source)
+    from InferSent.models import InferSent
+    from helpers import (CellDatasetInMemory, TableCellSample, Preprocess, SentEnc,
+            label2ind, split_train_test, get_nonempty_cells,
+            get_annotations, get_cevectarr, get_fevectarr,
+            get_class_weights, get_df)
+    main(spec)
     

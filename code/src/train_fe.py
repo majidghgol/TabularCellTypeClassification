@@ -1,5 +1,4 @@
 from models import FeatEnc
-from helpers import CellDatasetInMemory, TableCellSample, fe_fit_iterative
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -13,64 +12,40 @@ import numpy as np
 import sys
 import argparse
 import json
-from InferSent.models import InferSent
 from torch.utils.data import DataLoader
 import logging
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--threads', type=int, default=8)
-    parser.add_argument('--input_file', type=str)
-    parser.add_argument('--out_path', type=str)
-    parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--train_size', type=int, default=5000000)
-    # parser.add_argument('--cv_size', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--loss', type=str, default='mse')
-    parser.add_argument('--epochs', type=int, default=20)
-    parser.add_argument('--encdim', type=int, default=512)
-    parser.add_argument('--fdim', type=int, default=43)
-    
+def main(spec):
+    np.random.seed(spec['seed'])
+    torch.manual_seed(spec['seed'])
 
-    FLAGS, unparsed = parser.parse_known_args()
-
-    np.random.seed(12345)
-    torch.manual_seed(12345)
-
-    os.environ["OMP_NUM_THREADS"] = str(FLAGS.threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(FLAGS.threads)
-    os.environ["MKL_NUM_THREADS"] = str(FLAGS.threads)
-    os.environ["VECLIB_MAXIMUM_THREADS"] = str(FLAGS.threads)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(FLAGS.threads)
-
-    device = FLAGS.device
-    out_path = FLAGS.out_path
-    d = FLAGS.encdim
-    fdim = FLAGS.fdim
-    num_epochs = FLAGS.epochs
-    lr = FLAGS.lr
-    loss = FLAGS.loss
-    train_size = FLAGS.train_size
-    # dev_size = FLAGS.cv_size
-    dev_size = 0
-    target_p = 1.0
-    min_row = 3
-    min_col = 2
-    window = 0
+    device = spec['device']
+    input_file = spec['ce']['input_file']
+    out_path = spec['ce']['model_path']
+    d = spec['fe']['encdim']
+    num_epochs = spec['ce']['epochs']
+    lr = spec['ce']['lr']
+    loss = spec['ce']['loss']
+    train_size = spec['ce']['train_size']
+    dev_size = spec['ce']['cv_size']
+    target_p = spec['ce']['target_p']
+    min_row = spec['ce']['min_row']
+    min_col = spec['ce']['min_col']
+    window = spec['ce']['window']
+    fdim = spec['fe']['fdim']
     half_precision = False
 
     torch.cuda.set_device(device)
-
     cell_sampler = TableCellSample(target_p, min_row, min_col, window)
     
-    with gzip.open(FLAGS.input_file) as infile:
+    with gzip.open(input_file) as infile:
         tables = np.array([json.loads(line) for li, line in enumerate(infile) if li < (train_size+dev_size)])
 
     inds = np.random.permutation(np.arange(len(tables)))
     # dev_tables = tables[inds[:dev_size]]
     train_tables = tables[inds[dev_size:]]
 
-    train_cells = [cell_sampler.sample(t['table_array'], t['feature_array']) for t in tqdm(train_tables)]
+    train_cells = [cell_sampler.sample(t['table_array'], t['feature_array'], None) for t in tqdm(train_tables)]
     train_cells = [x for xx in train_cells for x in xx]
     # dev_cells = [cell_sampler.sample(t['table_array'], t['feature_array']) for t in tqdm(dev_tables)]
     # dev_cells = [x for xx in dev_cells for x in xx]
@@ -85,12 +60,33 @@ if __name__ == '__main__':
 
     fe_model = FeatEnc(fdim, d).to(device)
     if half_precision:
-        fe_model = ce_model.half()
+        fe_model = fe_model.half()
     logging.basicConfig(filename=out_path+'/train.log',level=logging.DEBUG)
     for mi, (m, train_loss, dev_loss) in enumerate(fe_fit_iterative(fe_model, lr, loss, 
                                                           dataloader_train, dataloader_dev, 
                                                           num_epochs, device, hp=half_precision)):
         logging.info(f'epoch {mi+1}, train_loss: {train_loss}, dev_loss: {dev_loss}\n')
-        torch.save(m.state_dict(), out_path+f'/CE_epoch{mi}.model')
+    torch.save(m.state_dict(), out_path+f'/FE.model')
     
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--spec_path', type=str)
+    parser.add_argument('--infersent_source', type=str)
+
+    FLAGS, unparsed = parser.parse_known_args()
+
+    spec = json.load(open(FLAGS.spec_path))
+
+    nthreads = spec['threads']
+    os.environ["OMP_NUM_THREADS"] = str(nthreads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(nthreads)
+    os.environ["MKL_NUM_THREADS"] = str(nthreads)
+    os.environ["VECLIB_MAXIMUM_THREADS"] = str(nthreads)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(nthreads)
+
+    sys.path.append(FLAGS.infersent_source)
+    from InferSent.models import InferSent
+    from helpers import CellDatasetInMemory, TableCellSample, fe_fit_iterative
+
+    main(spec)
