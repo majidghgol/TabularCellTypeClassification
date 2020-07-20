@@ -1,0 +1,45 @@
+{
+    "seed": 12345,
+    "w2v_path": "./deploy/GloVe/glove.840B.300d.txt",
+    "infersent_model": "./deploy/InferSent/infersent1.pkl",
+    "vocab_size": 60000,
+    "senc_dim": 4096,
+    "threads": 2,
+    "device": "cuda:0",
+    "cl": {
+        "method": "rnn",
+        "num_classes": 6,
+        "mode": "ce+f",
+        "train_size": 1000000,
+        "cv_size": 10,
+        "model_path": "./models/fine_tuned/",
+        "ce_model": "./models/CE.model",
+        "fe_model": "./models/FE.model",
+        "input_file": "annotations/saus.jl.gz",
+        "folds": "example/folds_saus.json",
+        "epochs": 50,
+        "lr": 1e-4
+    },
+    "ce": {
+        "input_file": "annotations/saus.jl.gz",
+        "train_size": 1000000,
+        "cv_size": 100,
+        "encdim": 512,
+        "epochs": 10,
+        "batch_size": 1000,
+        "lr": 1e-4,
+        "loss": "mse",
+        "model_path": "./models/",
+        "min_row": 3,
+        "min_col": 2,
+        "window": 2,
+        "target_p": 1.0
+    },
+    "fe": {
+        "fdim": 43,
+        "fdim_red": 23,
+        "encdim": 40,
+        "encdim_red": 20
+    }
+
+}
